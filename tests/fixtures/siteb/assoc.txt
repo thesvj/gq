@@ -1,0 +1,2 @@
+grpA||normal,gpu-long|normal|cpu=48|
+grpB|gpu|normal|normal||gres/gpu=8

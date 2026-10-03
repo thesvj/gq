@@ -1,0 +1,4 @@
+NodeName=b-gpu1 CPUAlloc=16 CPUTot=64 Gres=gpu:a100:4(S:0-1) RealMemory=512000 AllocMem=128000 State=MIXED Partitions=gpu CfgTRES=cpu=64,mem=500G,gres/gpu=4,gres/gpu:a100=4 AllocTRES=cpu=16,mem=125G,gres/gpu=1,gres/gpu:a100=1
+NodeName=b-gpu2 CPUAlloc=64 CPUTot=64 Gres=gpu:h100:4(S:0-1) RealMemory=512000 AllocMem=512000 State=ALLOCATED Partitions=gpu CfgTRES=cpu=64,mem=500G,gres/gpu=4,gres/gpu:h100=4 AllocTRES=cpu=64,mem=500G,gres/gpu=4,gres/gpu:h100=4
+NodeName=b-gpu3 CPUAlloc=0 CPUTot=64 Gres=gpu:a100:2,gpu:a40:2 RealMemory=512000 AllocMem=0 State=IDLE+DRAIN Partitions=gpu CfgTRES=cpu=64,mem=500G,gres/gpu=4 AllocTRES=
+NodeName=b-cpu1 CPUAlloc=38 CPUTot=128 Gres=(null) RealMemory=500000 AllocMem=100000 State=MIXED Partitions=cpu,staff,old CfgTRES=cpu=128,mem=500000M AllocTRES=cpu=38,mem=100000M

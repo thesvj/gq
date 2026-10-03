@@ -1,0 +1,135 @@
+#!/bin/bash
+# gqr — cluster side of gq. Runs on the LOGIN node and only does bookkeeping:
+# slurm queries, tmux session management, and file drops for the agent runner.
+# It never computes on the login node. Allocations it creates run `bash` on a compute node.
+set -u
+umask 077
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+G=$HOME/.gq
+Q=$G/q
+SAFE='^[A-Za-z0-9_.:,=@/+%~-]+$'
+
+die() { echo "ERR $1"; exit "${2:-1}"; }
+safe() { [[ ${1:-} =~ $SAFE ]] || die "unsafe value: ${1:-<empty>}"; }
+
+# --- security: ~/.gq must be ours and private (it is on shared NFS) -------------------------
+[ -d "$G" ] || die "no ~/.gq (run: gq setup)"
+[ "$(stat -c %u "$G")" = "$(id -u)" ] || die "~/.gq not owned by you"
+case $(stat -c %a "$G") in 700) ;; *) chmod 700 "$G" ;; esac
+mkdir -p "$Q"; chmod 700 "$Q"
+
+# --- slurm environment autodetect (sites put slurm in odd places) ---------------------------
+if [ -f "$G/env" ]; then . "$G/env"; fi   # written by `gq setup` when autodetect needed help
+if ! command -v squeue >/dev/null 2>&1; then
+  for d in /cm/shared/apps/slurm/current/bin /opt/slurm/bin /usr/local/slurm/bin /usr/local/bin /opt/slurm/current/bin; do
+    [ -x "$d/squeue" ] && { export PATH="$d:$PATH"; break; }
+  done
+fi
+if [ -z "${SLURM_CONF:-}" ] && ! timeout 10 scontrol ping >/dev/null 2>&1; then
+  for c in "$(dirname "$(command -v squeue 2>/dev/null)")/../etc/slurm.conf" /cm/shared/apps/slurm/var/etc/slurm/slurm.conf \
+           /etc/slurm/slurm.conf /etc/slurm-llnl/slurm.conf /usr/local/etc/slurm.conf; do
+    [ -f "$c" ] && { export SLURM_CONF=$c; break; }
+  done
+fi
+export LC_ALL=C
+T() { timeout 15 "$@"; }
+
+py() { # first python3 >= 3.6
+  for p in python3 /usr/bin/python3 /usr/local/bin/python3 python3.12 python3.11 python3.10 python3.9 python3.8 python3.6; do
+    command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(sys.version_info < (3, 6))' 2>/dev/null && { echo "$p"; return; }
+  done; return 1; }
+
+alive_age() { local f=$Q/$1/alive t; ls "$Q/$1" >/dev/null 2>&1; [ -f "$f" ] || { echo 999999; return; }
+  t=$(awk '{print $2}' "$f" 2>/dev/null); echo $(( $(date +%s) - ${t:-0} )); }
+rundir() { local f; f=$(ls -d "$Q"/*/"$1".* 2>/dev/null | head -1); [ -n "$f" ] || die "no run $1"; dirname "$f"; }
+
+cmd=${1:-}; shift || true
+case $cmd in
+version) cat "$HERE/VERSION" 2>/dev/null || echo unknown ;;
+
+doctor)
+  echo "host      $(hostname)"
+  echo "squeue    $(command -v squeue || echo MISSING)"
+  echo "SLURM_CONF ${SLURM_CONF:-(default)}"
+  echo "scontrol  $(T scontrol --version 2>&1 | head -1)"
+  echo "sacctmgr  $(T sacctmgr -nP show qos format=name 2>/dev/null | head -1 >/dev/null && echo ok || echo 'no access (scontrol-only mode)')"
+  echo "tmux      $(tmux -V 2>/dev/null || echo MISSING)"
+  echo "python    $(p=$(py) && $p -V 2>&1 || echo 'MISSING (need >= 3.6)')"
+  echo "gq        $(cat "$HERE/VERSION" 2>/dev/null) at $HERE" ;;
+
+snap) # snap [--account A] [--tokens P] [--no-cache]
+  for a in "$@"; do safe "$a"; done
+  p=$(py) || die "python3 >= 3.6 not found on login node"
+  exec "$p" "$HERE/snap.py" "$@" ;;
+
+new) # new NAME PART QOS|- ACCOUNT CPUS MEM TIME GRES|- NODE|- CAP_PA|- CAP_PU|-
+  [ $# -eq 11 ] || die "new: want 11 args"
+  for a in "$@"; do safe "$a"; done
+  name=$1 part=$2 qos=$3 acct=$4 cpus=$5 mem=$6 tim=$7 gres=$8 node=$9 cap_pa=${10} cap_pu=${11}
+  [[ $name =~ ^gq-[A-Za-z0-9_.-]+$ ]] || die "bad session name"
+  qf=(); [ "$qos" != - ] && qf=(-q "$qos")
+  # cap check (a submit rejected by QoS limits may still be charged by site plugins)
+  if [ "$qos" != - ]; then sel=(--qos "$qos"); else sel=(-p "$part"); fi   # QoS caps span partitions
+  if [ "$cap_pa" != - ]; then n=$(T squeue -h -A "$acct" "${sel[@]}" -t PD,R 2>/dev/null | wc -l)
+    [ "$n" -ge "$cap_pa" ] && die "REFUSED: account $acct already has $n/$cap_pa jobs in $part (pending+running)" 3; fi
+  if [ "$cap_pu" != - ]; then n=$(T squeue -h --me "${sel[@]}" -t PD,R 2>/dev/null | wc -l)
+    [ "$n" -ge "$cap_pu" ] && die "REFUSED: you already have $n/$cap_pu jobs in $part" 3; fi
+  tmux has-session -t "=$name" 2>/dev/null && die "session $name exists" 4
+  line=(srun -J "$name" -A "$acct" -p "$part" "${qf[@]}" --ntasks=1 --cpus-per-task="$cpus" --mem="$mem" --time="$tim")
+  [ "$gres" != - ] && line+=(--gres="$gres")
+  [ "$node" != - ] && line+=(--nodelist="$node")
+  line+=(--pty bash --rcfile "$G/current/rc" -i)
+  q=$(printf '%q ' "${line[@]}")
+  tmux new-session -d -s "$name" -x 200 -y 50 || die "tmux failed"
+  tmux set-window-option -t "=$name:" remain-on-exit on >/dev/null
+  tmux respawn-pane -k -t "=$name:" "export PATH=$(printf %q "$PATH") SLURM_CONF=$(printf %q "${SLURM_CONF:-}"); echo $(printf %q "[gq] $q"); $q; echo; echo \"[gq] allocation ended (rc=\$?). Ctrl-b d to detach.\"; exec bash --norc -i"
+  echo "$name" ;;
+
+cancel) # cancel JOBID [SESSION]
+  [[ ${1:-} =~ ^[0-9_]+$ ]] || die "bad jobid"
+  T squeue -h --me -j "$1" 2>/dev/null | grep -q . || die "job $1 is not yours or not queued"
+  scancel "$1"
+  if [ -n "${2:-}" ]; then safe "$2"; tmux kill-session -t "=$2" 2>/dev/null; fi
+  echo "cancelled $1 ${2:-}" ;;
+
+jobid) # SESSION|JOBID -> running job id
+  safe "${1:-}"
+  if [[ $1 =~ ^[0-9]+$ ]]; then echo "$1"
+  else T squeue -h --me -n "$1" -t R -o %i | head -1; fi ;;
+
+run) # run JOBID WORKDIR   (script on stdin) -> run id
+  [[ ${1:-} =~ ^[0-9]+$ ]] || die "bad jobid"; safe "${2:-}"; J=$1 wd=${2/#\~/$HOME} D=$Q/$1
+  T squeue -h --me -j "$J" -t R 2>/dev/null | grep -q . || die "job $J not running" 4
+  [ "$(alive_age "$J")" -lt 60 ] || die "no agent runner in job $J. In that job's shell run: source ~/.gq/current/rc" 5
+  id=$(date +%m%d-%H%M%S)-$RANDOM
+  cat > "$D/$id.tmp"; printf '%s' "$wd" > "$D/$id.wd"; mv "$D/$id.tmp" "$D/$id.sh"
+  echo "$id" ;;
+
+status)
+  safe "${1:-}"; D=$(rundir "$1") || { echo "$D"; exit 1; }; ls "$D" >/dev/null
+  J=$(basename "$D"); st=$(cat "$D/$1.start" 2>/dev/null || echo 0)
+  if [ -f "$D/$1.rc" ]; then echo "DONE id=$1 rc=$(cat "$D/$1.rc") dur=$(( $(stat -c %Y "$D/$1.rc") - st ))s log=$D/$1.log"
+  elif [ -f "$D/$1.sh" ]; then echo "QUEUED id=$1 job=$J"
+  elif [ "$(alive_age "$J")" -ge 60 ]; then echo "LOST id=$1 job=$J (runner gone: allocation ended?) log=$D/$1.log"
+  else echo "RUNNING id=$1 job=$J elapsed=$(( $(date +%s) - st ))s log=$D/$1.log"; fi ;;
+
+wait) # wait ID [TIMEOUT<=540]
+  safe "${1:-}"; to=${2:-540}; [[ $to =~ ^[0-9]+$ ]] || to=540; [ "$to" -gt 540 ] && to=540
+  end=$(( $(date +%s) + to ))
+  while :; do
+    s=$("$0" status "$1"); case $s in DONE*) echo "$s"; exit 0;; LOST*|ERR*) echo "$s"; exit 70;; esac
+    [ "$(date +%s)" -ge "$end" ] && { echo "$s (still running: call wait again)"; exit 75; }
+    sleep 5
+  done ;;
+
+tail) # tail ID [N] [REGEX]   -> cleaned (\r, ANSI), deduped, capped at 4 KB
+  safe "${1:-}"; D=$(rundir "$1") || { echo "$D"; exit 1; }; n=${2:-40}; [[ $n =~ ^[0-9]+$ ]] || n=40; re=${3:-}
+  tr '\r' '\n' < "$D/$1.log" | sed 's/\x1b\[[0-9;?]*[A-Za-z]//g' | grep -v '^[[:space:]]*$' \
+    | { if [ -n "$re" ]; then grep -E -- "$re"; else cat; fi; } | uniq | tail -n "$n" | cut -c1-300 | tail -c 4096 ;;
+
+stop) safe "${1:-}"; D=$(rundir "$1") || { echo "$D"; exit 1; }; touch "$D/$1.kill"; echo "stop requested $1" ;;
+
+gc) find "$Q" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null; echo ok ;;
+
+*) echo "gqr version|doctor|snap|new|cancel|jobid|run|status|wait|tail|stop|gc"; exit 2 ;;
+esac

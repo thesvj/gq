@@ -1,0 +1,41 @@
+#!/bin/bash
+# agentd — the agent runner. Runs INSIDE an allocation (on the compute node, never the login node).
+# Executes scripts that `gq run` drops in ~/.gq/q/<jobid>/. No new Slurm job or step is created,
+# so agent work costs nothing extra. Exits automatically when the allocation ends.
+# File protocol v1: <id>.sh (queued) -> <id>.run (claimed) + .start/.pid -> .log -> .rc ; <id>.kill = stop
+umask 077
+J=$1; D=$HOME/.gq/q/$J
+mkdir -p "$D"; chmod 700 "$HOME/.gq/q" "$D"
+[ "$(stat -c %u "$D")" = "$(id -u)" ] || { echo "agentd: $D not owned by you" >&2; exit 1; }
+SHIM=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)/shim
+trap 'rm -f "$D/alive"' EXIT
+n=0; idle_since=$(date +%s)
+while :; do
+  echo "$(hostname) $(date +%s) 1" > "$D/alive.tmp" && mv "$D/alive.tmp" "$D/alive"
+  if [ $((n % 15)) -eq 0 ] && command -v nvidia-smi >/dev/null; then   # every ~30 s, for the dashboard
+    read -r u m < <(nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null \
+                    | head -1 | tr -d ' ' | tr ',' ' ')
+    case $u in ''|*[!0-9]*) u='?' ;; esac
+    now=$(date +%s); { [ "$u" = '?' ] || [ "$u" -ge 5 ]; } && idle_since=$now
+    echo "$now $u ${m:-?} $(( (now - idle_since) / 60 ))" > "$D/gpu.tmp" && mv "$D/gpu.tmp" "$D/gpu"
+  fi; n=$((n + 1))
+  ls "$D" >/dev/null 2>&1   # refresh NFS directory cache
+  for f in "$D"/*.sh; do
+    [ -e "$f" ] || break
+    [ "$(stat -c %u "$f")" = "$(id -u)" ] || { rm -f "$f"; continue; }   # only our own files
+    id=$(basename "$f" .sh)
+    [[ $id =~ ^[0-9A-Za-z_-]+$ ]] || { rm -f "$f"; continue; }
+    mv "$f" "$D/$id.run" 2>/dev/null || continue
+    date +%s > "$D/$id.start"
+    setsid bash -c 'cd "$(cat "$1/$2.wd" 2>/dev/null)" 2>/dev/null || cd
+      PATH=$3:$PATH GQ_AGENT=1 GQ_RUN=$2 bash "$1/$2.run" > "$1/$2.log" 2>&1
+      echo $? > "$1/$2.rc.tmp"; mv "$1/$2.rc.tmp" "$1/$2.rc"' _ "$D" "$id" "$SHIM" &
+    echo $! > "$D/$id.pid"
+  done
+  for k in "$D"/*.kill; do
+    [ -e "$k" ] || break
+    id=$(basename "$k" .kill); kill -TERM -- -"$(cat "$D/$id.pid" 2>/dev/null)" 2>/dev/null; rm -f "$k"
+    sleep 1; [ -f "$D/$id.rc" ] || { echo 143 > "$D/$id.rc.tmp"; mv "$D/$id.rc.tmp" "$D/$id.rc"; }
+  done
+  sleep 2
+done

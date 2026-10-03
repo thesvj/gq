@@ -1,0 +1,6 @@
+#!/bin/bash
+# gq shim, only on PATH inside agent runs (GQ_AGENT=1): agents may not create new jobs.
+if [ -n "${GQ_AGENT:-}" ]; then
+  echo "gq: salloc is blocked inside agent runs (a new job may cost quota/tokens). Ask a human." >&2; exit 97
+fi
+PATH=${PATH#*/shim:} exec salloc "$@"

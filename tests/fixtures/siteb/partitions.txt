@@ -1,0 +1,4 @@
+PartitionName=gpu AllowGroups=ALL AllowAccounts=ALL AllowQos=normal,gpu-long DenyAccounts=banned Default=NO QoS=N/A DefaultTime=01:00:00 Hidden=NO MaxTime=2-00:00:00 MaxCPUsPerNode=48 Nodes=b-gpu[1-3] State=UP TotalCPUs=192 TotalNodes=3 DefMemPerCPU=4000 MaxMemPerNode=UNLIMITED TRES=cpu=192,mem=1500G,node=3,gres/gpu=12
+PartitionName=cpu AllowGroups=ALL AllowAccounts=ALL AllowQos=ALL Default=YES QoS=N/A DefaultTime=01:00:00 Hidden=NO MaxTime=7-00:00:00 Nodes=b-cpu1 State=UP TotalCPUs=128 TotalNodes=1 MaxMemPerNode=250000 TRES=cpu=128,mem=500G,node=1
+PartitionName=staff AllowGroups=hpcstaff AllowAccounts=ALL AllowQos=ALL QoS=N/A MaxTime=UNLIMITED Nodes=b-cpu1 State=UP
+PartitionName=old AllowAccounts=ALL AllowQos=ALL QoS=N/A MaxTime=1:00:00 Nodes=b-cpu1 State=DRAIN

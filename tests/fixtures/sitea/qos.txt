@@ -1,0 +1,5 @@
+normal||||||||
+short|3||||cpu=10,gres/gpu:3g.71gb=1,mem=64G||06:00:00|DenyOnLimit
+medium|2||||cpu=16,gres/gpu=1,mem=256G||1-00:00:00|DenyOnLimit
+long|1||||cpu=20,gres/gpu=1,mem=512G||3-00:00:00|DenyOnLimit
+private|1||||cpu=32,gres/gpu=2,mem=512G||3-00:00:00|DenyOnLimit

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gq"
+dynamic = ["version"]
+description = "Slurm interactive sessions held in tmux on the login node: a dashboard, one-key attach, and a safe runner for coding agents"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = ["textual>=0.80"]
+keywords = ["slurm", "hpc", "tmux", "gpu", "cluster", "tui"]
+classifiers = [
+  "Environment :: Console :: Curses",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Distributed Computing",
+]
+
+[project.urls]
+Homepage = "https://github.com/thesvj/gq"
+
+[project.scripts]
+gq = "gq.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "vermin>=1.6"]
+
+[tool.setuptools]
+packages = ["gq", "gq.hooks"]
+
+[tool.setuptools.dynamic]
+version = { attr = "gq.__version__" }
+
+[tool.setuptools.package-data]
+gq = ["remote_files/*", "remote_files/shim/*"]

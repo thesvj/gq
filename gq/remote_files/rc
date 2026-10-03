@@ -1,0 +1,17 @@
+# gq allocation shell rc (srun ... --pty bash --rcfile ~/.gq/current/rc).
+# Loads your normal ~/.bashrc, sets a prompt that says where you are, and (if enabled) starts the
+# agent runner for this allocation. Safe to `source ~/.gq/current/rc` in any existing allocation shell.
+[ -f ~/.bashrc ] && . ~/.bashrc >/dev/null 2>&1
+if [ -n "${SLURM_JOB_ID:-}" ]; then
+  PS1="[gq ${SLURM_JOB_PARTITION:-} $SLURM_JOB_ID \h] \w\$ "
+  _gq_rel=$(readlink -f ~/.gq/current)   # pin this allocation to the release it started with
+  if [ -f ~/.gq/agents.enabled ] || [ "${1:-}" = "--agents" ]; then
+    if ! pgrep -u "$(id -u)" -f "agentd $SLURM_JOB_ID\$" >/dev/null; then
+      setsid nohup bash "$_gq_rel/agentd" "$SLURM_JOB_ID" >/dev/null 2>&1 < /dev/null &
+      disown 2>/dev/null
+    fi
+    _gq_ag="agent runner: on"
+  else _gq_ag="agent runner: off (gq config: agents = true)"; fi
+  echo "[gq] job $SLURM_JOB_ID on $(hostname)  GPU=${CUDA_VISIBLE_DEVICES:-none}  $_gq_ag"
+  unset _gq_rel _gq_ag
+fi
