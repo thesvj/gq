@@ -82,7 +82,9 @@ new) # new NAME PART QOS|- ACCOUNT CPUS MEM TIME GRES|- NODE|- CAP_PA|- CAP_PU|-
   q=$(printf '%q ' "${line[@]}")
   tmux new-session -d -s "$name" -x 200 -y 50 || die "tmux failed"
   tmux set-window-option -t "=$name:" remain-on-exit on >/dev/null
-  tmux respawn-pane -k -t "=$name:" "export PATH=$(printf %q "$PATH") SLURM_CONF=$(printf %q "${SLURM_CONF:-}"); echo $(printf %q "[gq] $q"); $q; echo; echo \"[gq] allocation ended (rc=\$?). Ctrl-b d to detach.\"; exec bash --norc -i"
+  # Export SLURM_CONF only when set: an empty SLURM_CONF makes srun read the path "" ("cannot stat file :", precision).
+  envs="export PATH=$(printf %q "$PATH")"; [ -n "${SLURM_CONF:-}" ] && envs+=" SLURM_CONF=$(printf %q "$SLURM_CONF")"
+  tmux respawn-pane -k -t "=$name:" "$envs; [ -z \"\${SLURM_CONF:-}\" ] && unset SLURM_CONF; echo $(printf %q "[gq] $q"); $q; echo; echo \"[gq] allocation ended (rc=\$?). Ctrl-b d to detach.\"; exec bash --norc -i"
   echo "$name" ;;
 
 cancel) # cancel JOBID [SESSION]
